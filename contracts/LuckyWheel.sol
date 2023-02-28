@@ -1,131 +1,148 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.18;
 
-contract Roulette {
-    address payable public owner;
-    struct Player { uint16 tickets; uint16 amount; }
-    mapping(address => Player) playerInfo;
-    uint public ticketPrice;
+contract Lukywheel {
+    address private owner;
+    mapping(address => Player) private playerInfo; //may change to list due incapability of mapping interaction by index
+    Prize[] private prizes;
+    uint16 public ticketPrice;
+    uint16 public spinCount = 0;
 
-    Prize[] public prizes;
-    struct Prize { string name; uint16 weight; uint16 posis; uint16 tickets; }
+    struct Player {
+        // bool spinning; //spining state will aways be true if the contract reverts
+        uint16 tickets;
+        uint16 balance;
+        uint16 games;
+        uint16 wins;
+        bool blocked; //not using at now, working in progress
+        address user; //stores user's Lukywheel_user contract address
+    }
+    struct Prize {
+        string name;
+        uint8 weight;
+        uint8 posis;
+        uint8 tickets;
+    }
 
-    uint public spinCount;
-    bool public isSpinning;
+    event RewardLog(address indexed player, Prize prize);
+    event ActionLog(string indexed action, address indexed player, uint256 timestamp, uint256 blocknumber);
 
-    event SpinResult(uint16 indexed prizeIndex, Prize prize);
-    event ActionLog(string action, address indexed user, uint timestamp);
-    event RewardLog(Player player, uint16 posis, uint16 tickets);
-
-    constructor(uint _ticketPrice) {
+    constructor(uint16 _ticketPrice) {
         owner = payable(msg.sender);
         ticketPrice = _ticketPrice;
-        spinCount = 0;
-        isSpinning = false;
 
-        prizes.push(Prize("Lose", 1600, 0, 0));
-        prizes.push(Prize("1 Posi", 1200, 1, 0));
-        prizes.push(Prize("Lose", 1600, 0, 0));
-        prizes.push(Prize("2 Posi", 750, 2, 0));
-        prizes.push(Prize("+1 Spin", 1100, 0, 1));
-        prizes.push(Prize("3 Posi", 700, 3, 0));
-        prizes.push(Prize("Lose", 1600, 0, 0));
-        prizes.push(Prize("4 Posi", 600, 4, 0));
-        prizes.push(Prize("+2 Spin", 500, 0, 2));
-        prizes.push(Prize("8 Posi", 500, 8, 0));
+        prizes.push(Prize("Lose", 100, 0, 0));
+        prizes.push(Prize("1 Posi", 20, 1, 0));
+        prizes.push(Prize("Lose", 100, 0, 0));
+        prizes.push(Prize("2 Posi", 10, 2, 0));
+        prizes.push(Prize("+1 Spin", 40, 0, 1));
+        prizes.push(Prize("3 Posi", 5, 3, 0));
+        prizes.push(Prize("Lose", 100, 0, 0));
+        prizes.push(Prize("4 Posi", 2, 4, 0));
+        prizes.push(Prize("+2 Spin", 20, 0, 2));
+        prizes.push(Prize("8 Posi", 1, 8, 0));
     }
 
+    event vrflog(address a, uint256 b); //temporary
+
+    // BASE FUNCTIONS*******************************************************
     function spin() public {
-        require(playerInfo[msg.sender].tickets > 0, "No tickets left");
-        require(!isSpinning, "Previous spin in progress");
+        // require(playerInfo[msg.sender].tickets > 0, "No tickets left"); //temporary
+        require(!playerInfo[msg.sender].blocked, "alan alert");
+        if (playerInfo[msg.sender].user == address(0)) 
+            playerInfo[msg.sender].user = address(new Lukywheel_user());
 
-        // consume one ticket
-        playerInfo[msg.sender].tickets--;
-
-        // run the roulette spin
-        uint16 prizeIndex = _weightedRandom(prizes);
-
-        Prize memory selectedPrize = prizes[prizeIndex];
-        emit SpinResult(prizeIndex, selectedPrize);
-
-        // give reward
-        giveReward(selectedPrize.posis, selectedPrize.tickets);
-
-        spinCount++;
-        logAction("Spin");
+        uint256 vrf = Lukywheel_user(playerInfo[msg.sender].user).vrf();
+        emit vrflog(playerInfo[msg.sender].user, vrf); //temporary
+        giveReward(prizes[randomIndex(vrf)]);
+        log("Spin");
     }
 
-    function giveReward(uint16 _posis, uint16 _tickets) private {
-        if (_posis > 0) {
-            // give posi to player
-        }
-        playerInfo[msg.sender].tickets += _tickets;
-
-        emit RewardLog(playerInfo[msg.sender], _posis, _tickets);
-    }
-
-    function logAction(string memory _action) private {
-        emit ActionLog(_action, msg.sender, block.timestamp);
-    }
-
-    function buyTickets(uint16 numTickets) public payable {
-        require(msg.value == numTickets * ticketPrice, "Incorrect ticket price");
-        playerInfo[msg.sender].tickets += numTickets;
-        logAction("buyTickets");
-    }
-
-    function vrf() public view returns (bytes32 result) {
-        uint[1] memory bn;
-        bn[0] = block.number;
-        assembly {
-            let memPtr := mload(0x40)
-            if iszero(staticcall(not(0), 0xff, bn, 0x20, memPtr, 0x20)) {
-                    invalid()
-                }
-            result := mload(memPtr)
-        }
-    }
-
-    function _weightedRandom(Prize[] memory _weights) private view returns (uint16) {
-        uint sum = 0;
-        for (uint i = 0; i < _weights.length; i++) {
-            sum += _weights[i].weight;
-        }
-        
-        bytes32 randomNumber = vrf();
-        uint rand = uint(randomNumber);
-        rand = rand % sum;
-
+    function randomIndex(uint256 _vrf) private view returns (uint8) {
+        uint16 sum = 0;
+        for (uint8 i = 0; i < prizes.length; i++) 
+            sum += prizes[i].weight;
+        uint16 rnd = uint16(_vrf % sum);
         sum = 0;
-        for (uint16 i = 0; i < _weights.length; i++) {
-            sum += _weights[i].weight;
-            if (rand < sum) {
-                return i;
-            }
+        for (uint8 i = 0; i < prizes.length; i++) {
+            sum += prizes[i].weight;
+            if (rnd < sum) return i;
         }
-        
         revert("Weighted random calculation failed");
     }
 
-    function withdraw(uint amount) public {
-        require(msg.sender == owner, "Only owner can withdraw funds");
-        require(amount <= address(this).balance, "Insufficient contract balance");
-        owner.transfer(amount);
-        logAction("withdraw");
+    function giveReward(Prize memory _prize) private {
+        //uint type cannot be negative, doesnt make sense user tickets amount be negative anyway...
+        if (playerInfo[msg.sender].tickets > 0)
+            playerInfo[msg.sender].tickets--;
+        playerInfo[msg.sender].games++;
+        playerInfo[msg.sender].balance += _prize.posis;
+        playerInfo[msg.sender].tickets += _prize.tickets;
+        playerInfo[msg.sender].wins += _prize.posis > 0 ? 1 : 0;
+        spinCount++;
+        emit RewardLog(msg.sender, _prize);
     }
 
-    function getContractBalance() public view returns (uint) {
+    function log(string memory _action) private {
+        emit ActionLog(_action, msg.sender, block.timestamp, block.number);
+    }
+    //**********************************************************************
+
+    // TRANSACTION FUNCTIONS************************************************
+    function buyTickets(uint16 _numTickets) public payable {
+        require(msg.value == _numTickets * ticketPrice, "Incorrect ticket price");
+        playerInfo[msg.sender].tickets += _numTickets;
+        log("buyTickets");
+    }
+
+    function withdraw(uint256 _amount) public {
+        require(_amount <= address(this).balance, "Insufficient contract balance");
+        if (msg.sender != owner) 
+            require(_amount <= playerInfo[msg.sender].balance, "Insufficient user balance");
+        payable(msg.sender).transfer(_amount);
+        log("withdraw");
+    }
+    //**********************************************************************
+
+    // ONLY OWNER FUNCTIONS*************************************************
+    function getContractBalance() public view onlyOwner returns (uint256) {
         return address(this).balance;
     }
 
-    function getPrizeByIndex(uint16 prizeIndex) public view returns (Prize memory) {
-        require(prizeIndex >= 0 && prizeIndex < prizes.length, "Invalid prize index");
-        return prizes[prizeIndex];
+    function setTicketPrice(uint16 _newPrice) public onlyOwner {
+        ticketPrice = _newPrice;
+        log("setTicketPrice");
     }
 
-    function setTicketPrice(uint _newPrice) public {
-        require(msg.sender == owner, "Only owner can set ticket price");
-        ticketPrice = _newPrice;
-        logAction("setTicketPrice");
+    //this function can manipulate ucontract information outside contract
+    //temporary by now due discution of fairness in the future, added for security reasons
+    function setPlayerInfo(address _player, Player memory _info) public onlyOwner {
+        playerInfo[_player] = _info;
+    }
+
+    function getPlayer(address _player) public view onlyOwner returns (Player memory) {
+        return playerInfo[_player];
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+    //**********************************************************************
+}
+
+// CONTRACT PER USER
+contract Lukywheel_user {
+    constructor() {}
+
+    function vrf() public view returns (uint256 _result) {
+        uint256[1] memory bn = [uint256(keccak256(abi.encodePacked(block.number, msg.sender)))];
+        assembly {
+            let memPtr := mload(0x40)
+            if iszero(staticcall(not(0), 0xff, bn, 0x20, memPtr, 0x20)) {
+                invalid()
+            }
+            _result := mload(memPtr)
+        }
     }
 }
