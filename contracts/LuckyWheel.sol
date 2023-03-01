@@ -4,9 +4,12 @@ pragma solidity ^0.8.18;
 contract Lukywheel {
     address private owner;
     mapping(address => Player) private playerInfo; //may change to list due incapability of mapping interaction by index
+    address[] private players; //possible solution for 'mapping cant interact by index's problem ↑
     Prize[] private prizes;
-    uint16 public ticketPrice;
-    uint16 public spinCount = 0;
+    uint8 public ticketPrice;
+    uint32 public spins = 0;
+    uint32 public debt = 0; //necessary for contract knows how much he needs to pay if all players cashout at same time
+    // fixed public fee = 0.1; //open discussion on usage of contract fee or not
 
     struct Player {
         // bool spinning; //spining state will aways be true if the contract reverts
@@ -19,6 +22,7 @@ contract Lukywheel {
     }
     struct Prize {
         string name;
+        // fixed32x8 weight;
         uint8 weight;
         uint8 posis;
         uint8 tickets;
@@ -27,12 +31,13 @@ contract Lukywheel {
     event RewardLog(address indexed player, Prize prize);
     event ActionLog(string indexed action, address indexed player, uint256 timestamp, uint256 blocknumber);
 
-    constructor(uint16 _ticketPrice) {
+    constructor(uint8 _ticketPrice) {
         owner = payable(msg.sender);
         ticketPrice = _ticketPrice;
 
+        //change the weights to fixed, require lib
         prizes.push(Prize("Lose", 100, 0, 0));
-        prizes.push(Prize("1 Posi", 20, 1, 0));
+        prizes.push(Prize("1 Posi", 20, 1, 0)); //doesnt make sense spend 1 posi to gain 1 posi
         prizes.push(Prize("Lose", 100, 0, 0));
         prizes.push(Prize("2 Posi", 10, 2, 0));
         prizes.push(Prize("+1 Spin", 40, 0, 1));
@@ -47,8 +52,9 @@ contract Lukywheel {
 
     // BASE FUNCTIONS*******************************************************
     function spin() public {
-        // require(playerInfo[msg.sender].tickets > 0, "No tickets left"); //temporary
+        // require(playerInfo[msg.sender].tickets > 0, "No tickets left"); //temporary, faster for testing
         require(!playerInfo[msg.sender].blocked, "alan alert");
+        require(debt < address(this).balance, "contract limit"); //keep contract's debt on limit
         if (playerInfo[msg.sender].user == address(0)) 
             playerInfo[msg.sender].user = address(new Lukywheel_user());
 
@@ -79,7 +85,8 @@ contract Lukywheel {
         playerInfo[msg.sender].balance += _prize.posis;
         playerInfo[msg.sender].tickets += _prize.tickets;
         playerInfo[msg.sender].wins += _prize.posis > 0 ? 1 : 0;
-        spinCount++;
+        debt += _prize.posis;
+        spins++;
         emit RewardLog(msg.sender, _prize);
     }
 
@@ -90,15 +97,18 @@ contract Lukywheel {
 
     // TRANSACTION FUNCTIONS************************************************
     function buyTickets(uint16 _numTickets) public payable {
-        require(msg.value == _numTickets * ticketPrice, "Incorrect ticket price");
+        require(msg.value >= _numTickets * ticketPrice, "Incorrect ticket price");
         playerInfo[msg.sender].tickets += _numTickets;
         log("buyTickets");
     }
 
-    function withdraw(uint256 _amount) public {
+    //may change for only owner, must create a separate function 'userWithdraw' without paramters
+    function withdraw(uint32 _amount) public {
         require(_amount <= address(this).balance, "Insufficient contract balance");
-        if (msg.sender != owner) 
+        if (msg.sender != owner) {
             require(_amount <= playerInfo[msg.sender].balance, "Insufficient user balance");
+            debt -= _amount;
+        }
         payable(msg.sender).transfer(_amount);
         log("withdraw");
     }
@@ -109,7 +119,7 @@ contract Lukywheel {
         return address(this).balance;
     }
 
-    function setTicketPrice(uint16 _newPrice) public onlyOwner {
+    function setTicketPrice(uint8 _newPrice) public onlyOwner {
         ticketPrice = _newPrice;
         log("setTicketPrice");
     }
